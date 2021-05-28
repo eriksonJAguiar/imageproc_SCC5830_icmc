@@ -13,12 +13,7 @@
 """
 import numpy as np
 import imageio
-from os import listdir
-from matplotlib import pyplot as plt
-
-def normalize(image, a, b):
-    norm = (image - image.min())*((b - a)/(image.max() - image.min()))+a
-    return norm
+from scipy.fft import rfft2, irfft2, fftshift
 
 def root_mean_square_error(imgref, I_hat):
     '''
@@ -87,6 +82,47 @@ def adaptive_denoising_filtering(g_img,flat_reg, gamma, n, mode):
     
     return f_hat
 
+def gaussian_filter(k=3, sigma=1.0):
+    '''
+        gaussian filter
+        paramters:
+            - k -- filter size
+            - sigma -- standard deviation of distribution
+        return:
+            - filter
+    '''
+    arx = np.arange((-k // 2) + 1.0, (k // 2) + 1.0)
+    x, y = np.meshgrid(arx, arx)
+    filt = np.exp(-(1/2)*(np.square(x) + np.square(y))/np.square(sigma))
+
+    return filt/np.sum(filt)
+
+def constrained_least_square_filtering(g_img, gamma, k, sigma):
+    '''
+        Constrained least square filtering
+        parameters:
+            - g_img -- degraded image
+            - gamma -- gamma value
+            - k -- size of filter
+            - sigma -- standard deviation of filter
+        return:
+            - f_hat -- restored image
+    '''
+    h_filt = gaussian_filter(k, sigma)
+    pad_s = (g_img.shape[0]//2) - h_filt.shape[0]//2
+    h_filt_pad = np.pad(h_filt, (pad_s, pad_s-1))
+    p = np.array([[0,-1,0], [-1,4,-1], [0, -1, 0]], dtype=float)
+    pad_s = (g_img.shape[0]//2) - p.shape[0]//2
+    p_pad = np.pad(p, (pad_s, pad_s-1))
+    
+    H = rfft2(h_filt_pad)
+    G = rfft2(g_img)
+    P = rfft2(p_pad)
+
+    F_hat = np.multiply(np.divide(np.conj(H),(np.power(H, 2) + np.multiply(gamma,np.power(P,2)))), G)
+    f_hat = np.real(fftshift(irfft2(F_hat)))
+
+    return f_hat
 
 def select_method(f_img, g_img, gamma, parameters_f, method):
     '''
@@ -106,30 +142,13 @@ def select_method(f_img, g_img, gamma, parameters_f, method):
     if method == 1:
         img_restored = adaptive_denoising_filtering(g_img, parameters_f['flat_reg'], gamma, parameters_f['size'], parameters_f['mode'])
         f_hat = np.clip(img_restored, 0, 255)
-        plot(f_img, g_img, f_hat)
         rmse = root_mean_square_error(f_img, f_hat)
     elif method == 2:
-        #method 2
-        rmse = root_mean_square_error(f_img, I_hat)
+        img_restored = constrained_least_square_filtering(g_img, gamma, parameters_f['size'], parameters_f['sigma'])
+        f_hat = np.clip(img_restored, 0, 255)
+        rmse = root_mean_square_error(f_img, f_hat)
     
     return round(rmse, 4)
-
-def plot(f_img, g_img, f_hat):
-
-    plt.figure(figsize=(12, 12))
-    plt.subplot(131)
-    plt.imshow(f_img, cmap="gray", vmin=0, vmax=255)
-    plt.title('Original')
-    plt.axis('off')
-    plt.subplot(132)
-    plt.imshow(g_img, cmap="gray", vmin=0, vmax=255)
-    plt.title('Degraded')
-    plt.axis('off')
-    plt.subplot(133)
-    plt.imshow(f_hat, cmap="gray", vmin=0, vmax=255)
-    plt.title('Filtered')
-    plt.show()
-
 
 if __name__ == '__main__':
 
@@ -142,24 +161,23 @@ if __name__ == '__main__':
     g_img = imageio.imread(filename, as_gray=True)
 
     #type of filter F (1,2)
-    #F = 1 -- denoisilg filter
-    #F = 2 -- constrained
+    #F = 1 -- denoising filter
+    #F = 2 -- constrained ls
     method = int(input())
 
-    
     gamma = float(input())
     
     parameters_f = dict()
     if method == 1:
         param = input().rstrip()
-        parameters_f['flat_reg'] = array(param.split(' ')).astype(int)
+        parameters_f['flat_reg'] = np.array(param.split(' ')).astype(int)
         parameters_f['size'] = int(input())
         parameters_f['mode'] = input().rstrip()
     elif method == 2:
         parameters_f['size'] = int(input())
-        parameters_f['var'] = float(input())
+        parameters_f['sigma'] = float(input())
 
-    rmse = select_method(f_img, g_img, gamma, parameters_f)
+    rmse = select_method(f_img, g_img, gamma, parameters_f, method)
 
     print(rmse)
 
