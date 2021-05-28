@@ -1,2 +1,2 @@
-# imageproc_SSC5830_icmc
-Code made during Image Processing Class at ICMC USP -- SSC5830
+# imageproc_SCC5830_icmc
+Code made for Image Processing Class at ICMC USP -- SSC5830
