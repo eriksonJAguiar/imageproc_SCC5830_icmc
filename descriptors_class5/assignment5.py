@@ -13,9 +13,8 @@
 """
 import numpy as np
 import imageio
-from numpy.core.fromnumeric import shape
-from numpy.core.numeric import NaN
 import scipy.ndimage
+from matplotlib import pyplot as plt
 
 def pre_processing(img, b):
     '''
@@ -26,12 +25,12 @@ def pre_processing(img, b):
         return:
             - p_img: precessed image
     '''
-    lm_img = np.floor(((0.299*img[:,:,2])+(0.587*img[:,:,1])+(0.114*img[:,:,0]))).astype(np.int)
+    lm_img = np.floor(((0.299*img[:,:,2])+(0.587*img[:,:,1])+(0.114*img[:,:,0]))).astype(np.uint8)
     q_img = np.right_shift(lm_img, (8 - b))
 
-    return q_img
+    return q_img.astype(np.float64)
 
-def normalized_histogram(img):
+def normalized_histogram(img, no_levels):
     '''
         calculate normalized histogram of image
         paramters:
@@ -39,18 +38,18 @@ def normalized_histogram(img):
         return
             - dc: descritor vector
     '''
-    levels = np.unique(img.flatten())
-    hk_sum  = img.shape[0]*img.shape[1]
-    hist = np.zeros(len(levels), dtype=np.uint8)
-    for i,l in enumerate(levels):
-        hk = np.sum(img == l)
-        hist[i] = hk/hk_sum
-    
-    dc = hist/np.linalg.norm(hist)
+    # for i in range(no_levels):
+    #     hk = np.sum(img == i)
+    #     hist[i] = hk
+    # n_levels = img.max()
+    hist = np.histogram(img, bins=no_levels)[0]
+    hist_norm = hist/np.sum(hist)
+
+    dc = hist_norm/np.linalg.norm(hist_norm)
 
     return dc
     
-def descriptor_halarick(img):
+def descriptor_halarick(img, no_levels):
     '''
         descriptor using halarick
         paramters:
@@ -58,46 +57,38 @@ def descriptor_halarick(img):
         return
             - dc: descritor vector 
     '''
-    co_mat = cooccurrence_matrix(img)
+    co_mat = co_occurrence_matrix(img, no_levels)
 
     #calculate energy
-    energy = np.sum(np.power(co_mat, 2))
+    energy = np.sum(np.power(co_mat,2))
 
     #calculate entropy
     epsilon = 0.001
-    entropy = -np.sum(np.multiply(co_mat,np.log(co_mat+epsilon)))
+    entropy = -np.sum(co_mat*np.log(co_mat+epsilon))
 
     #calculate constrast, homogeneity, and correlation
-    constrast = 0.0
-    homogeneity = 0.0
-    correlation = 0.0
-    mu_i, mu_j, sigma_i, sigma_j = 0.0, 0.0, 0.0, 0.0
-    N,M = co_mat.shape
+    N,M = co_mat.shape 
+    x = np.arange(0, no_levels)
+    y = np.arange(0, no_levels)
+    i, j = np.meshgrid(x, y, sparse=True, indexing='xy')
+    constrast = (1/np.power((N*M),2))*np.sum((np.power((i - j), 2))*co_mat)
+    mu_i = np.sum(i)*np.sum(co_mat)
+    mu_j = np.sum(j)*np.sum(co_mat)
+    sigma_i = np.sum((i - mu_i)**2)*np.sum(co_mat)
     
-    for i in range(N):
-        for j in range(M):
-            constrast += ((i-j)**2)*co_mat[i,j]
-            
-            homogeneity += co_mat[i,j]/(1 + np.abs(i - j))
-            
-            mu_i += i*co_mat[i,j]
-            mu_j += j*co_mat[i,j]
-            sigma_i += ((i - mu_i)**2)*co_mat[i,j]
-            sigma_j += ((j - mu_j)**2)*co_mat[i,j]
-            if sigma_i > 0 and sigma_j > 0:
-                correlation += (float(i)*float(j)*co_mat[i,j] - (mu_i*mu_j))/(sigma_i*sigma_j)
-            else:
-                correlation += 0.0
+    sigma_j = np.sum((j - mu_j)**2)*np.sum(co_mat)
+    if sigma_i > 0 and sigma_j > 0:
+        correlation = (np.sum(i*j*co_mat) - (mu_i*mu_j))/(sigma_i*sigma_j)
+    else:
+        correlation = 0.0 
+    homogeneity = np.sum(co_mat/(1 + np.abs(i - j)))
 
-    constrast = (1/N**2)*constrast 
-
-    dt = [energy, entropy, constrast, correlation, homogeneity]
-    dt = np.array(dt, dtype=float)
+    dt = np.array([energy, entropy, constrast, correlation, homogeneity])
     dt = dt/np.linalg.norm(dt)
 
     return dt
 
-def cooccurrence_matrix(img):
+def co_occurrence_matrix(img, no_levels):
     '''
         Calculate co-occurrence matrix
         parameters:
@@ -106,15 +97,14 @@ def cooccurrence_matrix(img):
             - co_mat: co-ocurrence matrix 
     '''
     N,M = img.shape
-    levels = np.max(img)
-    co_mat = np.zeros((levels+1,levels+1), dtype=np.int)
+    co_mat = np.zeros((no_levels,no_levels))
     
-    for x in range(N-2):
-        for y in range(M-2):
-            i,j = img[x,y], img[x+1,y+1]
+    for x in range(N-1):
+        for y in range(M-1):
+            i,j = int(img[x,y]), int(img[x+1,y+1])
             co_mat[i,j] += 1
 
-    cn = np.divide(co_mat, np.sum(co_mat))
+    cn = co_mat/np.sum(co_mat)
 
     return cn 
 
@@ -129,91 +119,98 @@ def descriptor_hog(img):
     wsx = np.array([[-1,-2,-1],[0,0,0],[1,2,1]])
     wsy = np.array([[-1,0,1],[-2,0,2],[-1,0,1]])
 
-    #img = img.reshape((int(img.shape[0]//2), int(img.shape[1]//2)))
+
     gx = scipy.ndimage.convolve(img, wsx)
     gy = scipy.ndimage.convolve(img, wsy)
 
     np.seterr(divide='ignore', invalid='ignore')
 
-    M = np.sqrt(gx**2 + gy**2)/np.sum(np.sqrt((gx**2)+(gy**2)))
-    #M = np.sqrt(np.power(gx,2)+np.power(gy,2))/np.sum(np.sqrt(np.power(gx,2) +np.power(gy,2)))
-    #M = np.divide((np.sqrt((np.power(gx,2))+(np.power(gy,2)))),(np.sum(np.power(gx,2))+(np.power(gy,2))))
-    theta = np.arctan(gy/gx)
-    #theta + (np.pi/2)
-    theta = np.add(theta, np.pi/2)
+    m = np.sqrt(np.power(gx, 2) + (np.power(gy, 2)))
+    M = np.nan_to_num(m/np.sum(m))
+    theta = np.nan_to_num(np.arctan(gy/gx))
+    theta += (np.pi/2)
     theta_dg = np.degrees(theta)
 
+    theta_d = ((theta_dg-1)/(20)).astype(np.int)
+    #theta_d[theta_d >= 9] = 8
+
     A,B = M.shape
-    dg = np.zeros(9, dtype=np.float)
+    dg = np.zeros(9, dtype=np.float64)
     
     for x in range(A):
         for y in range(B):
-            idx = convert_to_bins(theta_dg[x,y])
-            dg[idx] += M[x,y]
+            bins = theta_d[x,y]
+            dg[bins] += M[x,y]
 
-
-    dg = dg/np.linalg.norm(dg)
+    dg = np.nan_to_num(dg/np.linalg.norm(dg))
 
     return  dg
 
-def convert_to_bins(degree):
-    '''
-        convert angles to bins (bins 0 to 8) range 20
-        parameters:
-            - angle: angle to convert
-        return:
-            - bin: angle bin
-    '''
-    bin_ = 8
-    for i in range(0,9):
-        if np.isnan(degree):
-           bin_ = 8
-           break
-        if degree in list(range(i, i+20)):
-            bin_ = i
-            break
-    
-    return bin_
 
-def find_object(obj_g, img_f):
+
+def apply_descriptors(img, no_levels):
+    '''
+        aux method to apply descriptors
+        paramters:
+            - img: image selected
+        return:
+            - des: concat descriptors
+    '''
+    dc = normalized_histogram(img, no_levels)
+    dt = descriptor_halarick(img, no_levels)
+    dg = descriptor_hog(img)
+    des = np.concatenate((dc,dt,dg))
+
+    return des
+
+def find_object(img_f, obj_g, b):
     '''
         Find object in image F
         parameters:
             - obj_g: object selected
             - img_f: image source 
         return:
-            - d: distance 
+            - D: distance 
     '''
-    C = img_f.shape[0]*img_f[1]
-    W = int(C/32)
+    N, M, _ = img_f.shape
+    C = N
+    W = int(np.floor(C/16))
+    img_f_tranf = pre_processing(img_f, b)
+    no_levels = np.unique(img_f_tranf.flatten()).shape[0]
+    obj_g_tranf = pre_processing(obj_g, b)
+
+    d = np.array(apply_descriptors(obj_g_tranf, no_levels))
+
+    dist, w, r  = [],[],[]
+    i = 0
     
-
-
-
-def select_method(f_img, g_img, b):
-    '''
-        function that select filter method and calculate the rmse between output 
-        image  and original image
-        parameters:
-            - f_img (numpy array): image with objet f
-            - g_img (numpy array): larger image g
-            - b: quatisation parameter
-        return:
-            - ???
-    '''
+    for win, x in enumerate(range(0, N, W)):
+        for row, y in enumerate(range(0,M, W)):
+            window = img_f_tranf[x:x+32, y:y+32]
+            di = np.array(apply_descriptors(window, no_levels))
+            dist.append(np.sqrt(np.sum(np.power((d - di), 2))))
+            w.append(win)
+            r.append(row)
+    
+    min_dist = np.argmin(dist)
+    
+    return w[min_dist], r[min_dist]
 
 if __name__ == '__main__':
-
-    #load reference image f   
-    filename = input().rstrip()
-    f_img = imageio.imread(filename)
 
     #load degraded image g
     filename = input().rstrip()
     g_img = imageio.imread(filename)
 
+    #load reference image f   
+    filename = input().rstrip()
+    f_img = imageio.imread(filename)
+
     #quantisation parameter
     b = int(input())
+
+    w,r = find_object(f_img, g_img, b)
+    print("{} {}".format(w,r))
 
 
 
